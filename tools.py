@@ -257,55 +257,72 @@ def search_web_for_issue(query: str, max_results: int = 3) -> List[Dict[str, str
         Exception: 搜索过程中的其他错误
     """
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
     except ImportError:
-        return [{
-            "title": "Error",
-            "url": "",
-            "snippet": "请先安装 duckduckgo-search: pip install duckduckgo-search"
-        }]
+        try:
+            from duckduckgo_search import DDGS
+        except ImportError:
+            return [{
+                "title": "Error",
+                "url": "",
+                "snippet": "请先安装 ddgs: pip install ddgs"
+            }]
     
     results = []
-    
+
     try:
         with DDGS() as ddgs:
             # 执行搜索
             search_results = ddgs.text(query, max_results=max_results)
-            
+
             for i, result in enumerate(search_results):
-                results.append({
-                    "title": result.get("title", f"Result {i+1}"),
-                    "url": result.get("href", ""),
-                    "snippet": result.get("body", "")
-                })
+                # 确保所有值都是字符串
+                title = result.get("title", f"Result {i+1}")
+                url = result.get("href", "")
+                body = result.get("body", "")
                 
+                # 转换为字符串
+                if isinstance(title, bytes):
+                    title = title.decode('utf-8', errors='ignore')
+                if isinstance(url, bytes):
+                    url = url.decode('utf-8', errors='ignore')
+                if isinstance(body, bytes):
+                    body = body.decode('utf-8', errors='ignore')
+                
+                results.append({
+                    "title": str(title),
+                    "url": str(url),
+                    "snippet": str(body)
+                })
+
                 if len(results) >= max_results:
                     break
-                    
+
     except Exception as e:
         results.append({
             "title": "Search Error",
             "url": "",
             "snippet": f"搜索过程中发生错误: {str(e)}"
         })
-    
+
     return results
 
 
 # =============================================================================
 # 工具 3: execute_real_command() - 真实命令执行工具
 # =============================================================================
-def execute_real_command(command: str, working_dir: Optional[str] = None) -> Dict[str, str]:
+def execute_real_command(command: str, working_dir: Optional[str] = None, use_powershell: bool = False) -> Dict[str, str]:
     """
     执行工具：在真实终端环境中执行命令。
     
     **警告**: 这是一个极度危险且强大的工具。Agent 可以生成探测性命令，
     但必须在控制台中明确询问用户 [Y/n]，用户同意后才能执行。
-    
+
     参数:
         command: 要执行的命令字符串
         working_dir: 工作目录（可选，默认为当前目录）
-    
+        use_powershell: 是否使用 PowerShell 执行（默认 False，使用 CMD）
+
     返回:
         字典，包含:
         - success: bool - 命令是否成功执行
@@ -313,7 +330,7 @@ def execute_real_command(command: str, working_dir: Optional[str] = None) -> Dic
         - stdout: str - 标准输出
         - stderr: str - 标准错误
         - command: str - 原始命令
-    
+
     注意:
         - 使用 subprocess.run(shell=True) 在真实 Shell 中执行
         - 捕获 stdout 和 stderr 流
@@ -326,37 +343,93 @@ def execute_real_command(command: str, working_dir: Optional[str] = None) -> Dic
         "stderr": "",
         "command": command
     }
-    
+
     try:
         # 确定工作目录
         cwd = working_dir if working_dir else os.getcwd()
-        
+
+        # 如果使用 PowerShell，添加 powershell -Command 前缀
+        # 但避免重复添加
+        if use_powershell:
+            cmd_lower = command.lower().strip()
+            # 检查是否已经包含 powershell 前缀（包括 powershell, pwsh, powershell -Command 等）
+            is_powershell_cmd = (
+                cmd_lower.startswith('powershell') or 
+                cmd_lower.startswith('pwsh') or
+                cmd_lower.startswith('powershell -command') or
+                cmd_lower.startswith('pwsh -command')
+            )
+            if not is_powershell_cmd:
+                # 使用单引号包裹命令，避免特殊字符被解释
+                command = f"powershell -Command '{command}'"
+            # 如果已经有 powershell 前缀，则不需要再添加
+
         # 在真实 Shell 中执行命令
-        # shell=True 允许执行复杂的命令（如管道、重定向）
-        proc = subprocess.run(
-            command,
-            shell=True,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            timeout=60  # 60秒超时
-        )
-        
+        # 使用 powershell -Command 来执行，确保管道等特殊字符被正确处理
+        if use_powershell:
+            # 如果命令已经包含 powershell 前缀，直接执行
+            if cmd_lower.startswith('powershell') or cmd_lower.startswith('pwsh'):
+                final_cmd = command
+            else:
+                # 使用单引号包裹命令，避免特殊字符被解释
+                final_cmd = f"powershell -Command '{command}'"
+            proc = subprocess.run(
+                final_cmd,
+                shell=True,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=60  # 60秒超时
+            )
+        else:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=60  # 60秒超时
+            )
+
         result["returncode"] = proc.returncode
         result["stdout"] = proc.stdout
         result["stderr"] = proc.stderr
-        
+
         if proc.returncode == 0:
             result["success"] = True
-            
+
     except subprocess.TimeoutExpired:
         result["stderr"] = "命令执行超时（超过 60 秒）"
     except FileNotFoundError:
         result["stderr"] = "无法执行命令：找不到可执行文件"
     except Exception as e:
         result["stderr"] = f"执行命令时发生异常: {str(e)}"
-    
+
     return result
+
+
+# =============================================================================
+# 工具 3b: execute_powershell_command() - PowerShell 专用执行工具
+# =============================================================================
+def execute_powershell_command(script: str, working_dir: Optional[str] = None) -> Dict[str, str]:
+    """
+    PowerShell 专用执行工具：在真实 PowerShell 环境中执行脚本。
+    
+    这是 execute_real_command 的 PowerShell 专用版本，自动添加 powershell 前缀。
+
+    参数:
+        script: PowerShell 脚本内容
+        working_dir: 工作目录（可选，默认为当前目录）
+
+    返回:
+        字典，包含:
+        - success: bool - 命令是否成功执行
+        - returncode: int - 返回码
+        - stdout: str - 标准输出
+        - stderr: str - 标准错误
+        - command: str - 原始命令
+    """
+    return execute_real_command(script, working_dir=working_dir, use_powershell=True)
 
 
 # =============================================================================
