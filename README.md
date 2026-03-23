@@ -9,6 +9,8 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-orange?style=for-the-badge)](https://github.com/Decent898/Sys-Mentor)
 
+![](assets/ICON.png)
+
 ---
 
 ## 🚀 为什么选择 Sys-Mentor？
