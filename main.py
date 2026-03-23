@@ -406,6 +406,10 @@ class SysMentor:
         self.api_key = get_api_key("deepseek")
         self.api_base_url = get_api_base_url("deepseek")
         self.client: Optional[OpenAI] = None
+
+        # 环境状态跟踪（黑魔法）
+        self.active_venv = None  # 当前激活的虚拟环境名称
+        self.original_path = os.environ.get("PATH", "")  # 保存原始 PATH
         
         # 尝试初始化 OpenAI 客户端
         if self.api_key:
@@ -420,6 +424,77 @@ class SysMentor:
         else:
             console.print("[yellow]⚠ 未设置 DEEPSEEK_API_KEY，部分功能将不可用[/yellow]")
     
+
+    def execute_and_absorb_state(self, command: str) -> bool:
+        """
+        👇 通用状态拦截器：执行命令，并吸取其运行后的环境变量和工作目录
+        支持：cd, activate, conda activate, vcvarsall, nvm use 等
+        """
+        is_windows = True  # 本项目主要针对 Windows
+        
+        # 核心黑魔法：在命令后面加上打印环境的指令
+        # Windows 使用 `&& set`，Linux/Mac 使用 `&& env`
+        magic_cmd = f'cmd.exe /c "{command} && set"'
+
+        try:
+            result = subprocess.run(
+                magic_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0:
+                absorbed_vars = 0
+                # 逐行解析子进程吐出的环境状态
+                for line in result.stdout.splitlines():
+                    if '=' in line:
+                        key, val = line.split('=', 1)
+                        key = key.strip()
+                        val = val.strip()
+
+                        # 👇 降维打击 1：拦截目录切换 (cd)
+                        if key.upper() == 'CD':
+                            if os.path.exists(val):
+                                os.chdir(val)
+                                continue
+
+                        # 过滤掉一些命令行自身的临时噪音变量
+                        if key.upper() not in ['PROMPT', 'ERRORLEVEL', '_', 'SHLVL', 'CMD_EXT_VERSION']:
+                            # 👇 降维打击 2：覆盖当前 Python 进程的环境变量
+                            os.environ[key] = val
+                            absorbed_vars += 1
+                
+                # 更新虚拟环境状态 (Conda 优先)
+                conda_env = os.environ.get('CONDA_DEFAULT_ENV')
+                venv = os.environ.get('VIRTUAL_ENV')
+                
+                # Conda 环境优先级最高
+                if conda_env:
+                    self.active_venv = conda_env
+                elif venv:
+                    self.active_venv = os.path.basename(venv)
+                else:
+                    self.active_venv = None
+                
+                console.print(f"[bold green]✓ 状态已接管 (吸收了 {absorbed_vars} 个环境变量)[/bold green]")
+                if self.active_venv:
+                    console.print(f"[dim]当前虚拟环境：{self.active_venv}[/dim]")
+                return True
+            else:
+                console.print(f"[bold red]✗ 状态接管失败：命令执行报错[/bold red]")
+                if result.stderr:
+                    console.print(f"[dim red]{result.stderr.strip()}[/dim red]")
+                return False
+
+        except subprocess.TimeoutExpired:
+            console.print("[red]✗ 拦截超时 (超过 30 秒)[/red]")
+            return False
+        except Exception as e:
+            console.print(f"[red]✗ 拦截异常：{str(e)}[/red]")
+            return False
+
     def add_message(self, role: str, content: str):
         """
         向对话历史添加消息
@@ -523,6 +598,37 @@ class SysMentor:
         if cmd_stripped.lower() in ['/clear', '/probe', '/exit', '/quit', '/help', '/ask']:
             return False
         
+
+        # 黑魔法：拦截状态修改命令
+        stateful = ['activate', 'conda', 'cd ', 'vcvars']
+        if any(s in cmd_stripped.lower() for s in stateful):
+            console.print('[cyan]🔮 检测到状态修改指令，正在进行底层环境接管...[/cyan]')
+            
+            # 特殊处理 conda activate，使用 activate.bat
+            if cmd_stripped.lower().startswith('conda activate '):
+                env_name = cmd_stripped[15:].strip()
+                # 尝试多个可能的 Conda 安装位置
+                conda_roots = [
+                    os.path.expanduser('~/anaconda3'),
+                    os.path.expanduser('~/miniconda3'),
+                    r'C:\ProgramData\Anaconda3',
+                    r'C:\ProgramData\Miniconda3',
+                ]
+                activate_cmd = None
+                for root in conda_roots:
+                    test_path = os.path.join(root, 'Scripts', 'activate.bat')
+                    if os.path.exists(test_path):
+                        activate_cmd = test_path + f' {env_name}'
+                        break
+                if not activate_cmd:
+                    # 默认使用用户目录
+                    activate_cmd = os.path.expanduser('~/anaconda3/Scripts/activate.bat') + f' {env_name}'
+                console.print(f'[dim]使用 activate.bat 激活：{activate_cmd}[/dim]')
+                result = self.execute_and_absorb_state(activate_cmd)
+            else:
+                result = self.execute_and_absorb_state(cmd_stripped)
+            return True
+
         # 只执行常见的终端命令
         terminal_commands = [
             'python', 'pip', 'git', 'node', 'npm', 'yarn',
@@ -965,9 +1071,13 @@ def main():
             # 显示当前工作目录作为提示符
             current_dir = os.getcwd()
             console.print("\n" + "-" * 40)
+            
+            # 虚拟环境前缀
+            venv_prefix = f'({mentor.active_venv}) ' if mentor.active_venv else ''
+            
             user_input = Prompt.ask(
-                f"{current_dir} >",
-                default="",
+                f'{venv_prefix}{current_dir} >',
+                default='',
                 console=console
             ).strip()
 

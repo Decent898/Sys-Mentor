@@ -30,6 +30,9 @@
 ---
 
 ## 💡 核心特性
+![Sys-Mentor Preview](assets/1.png)
+![Sys-Mentor Answer](assets/2.png)
+---
 
 ### 🔍 系统探针 - 像 CT 扫描一样透视你的系统
 
@@ -52,6 +55,8 @@
 ```
 
 ### ⚡ 安全命令执行 - 你的系统你做主
+
+![Safety Guarantee](assets/3.png)
 
 ```
 ⚠️  危险命令
@@ -116,7 +121,7 @@ python main.py
 ```
 
 ### 真实对话示例
-
+![Multi-QA](assets/4.png)
 ```
 (Sys-Mentor) > 我的 Python 环境变量有问题，pip 命令找不到
 
